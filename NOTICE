@@ -1,0 +1,16 @@
+astro-page-markdown
+Copyright 2025 astro-page-markdown contributors
+
+This project is a derivative work based on @nuasite/llm-enhancements,
+originally developed by Contember Limited (https://github.com/nuasite/nuasite).
+
+Original work: @nuasite/llm-enhancements
+Copyright 2024 Contember Limited
+Licensed under the Apache License, Version 2.0
+Repository: https://github.com/nuasite/nuasite/tree/main/packages/llm-enhancements
+
+Changes from the original:
+- Removed @nuasite/cms dependency and all content collection integration
+- Updated peer dependencies to support Astro 5/6 and Vite 6/7
+- Renamed package to astro-page-markdown
+- Simplified to static page processing only

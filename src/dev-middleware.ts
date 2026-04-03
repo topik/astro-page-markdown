@@ -1,0 +1,201 @@
+import type { AstroConfig } from 'astro'
+import type { ViteDevServer } from 'vite'
+import { htmlToMarkdown } from './html-to-markdown'
+import { generateLlmMarkdown } from './llm-endpoint'
+import { generateLlmsTxt } from './llms-txt-endpoint'
+import { createStaticOutput, generateMarkdown } from './markdown-generator'
+import { getBaseUrl, injectMarkdownLink, LLM_ENDPOINT_PATH, LLMS_TXT_PATH, mdUrlToPagePath, normalizePath } from './paths'
+import type { PageEntry, ResolvedOptions, SiteMetadata } from './types'
+
+const ASSET_PATTERN = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|json)$/
+
+/**
+ * Generate markdown for a given page path
+ */
+async function generateMarkdownForPath(
+	pagePath: string,
+	host: string,
+	options: ResolvedOptions,
+	baseUrl: string,
+): Promise<string | null> {
+	if (!options.includeStaticPages) {
+		return null
+	}
+
+	const response = await fetch(`http://${host}${pagePath}`, {
+		headers: { Accept: 'text/html' },
+	})
+
+	if (!response.ok) return null
+
+	const contentType = response.headers.get('content-type')
+	if (!contentType?.includes('text/html')) return null
+
+	const html = await response.text()
+	const { metadata, body } = htmlToMarkdown(html)
+	const output = createStaticOutput(metadata, body)
+
+	return generateMarkdown(output, {
+		url: pagePath,
+		baseUrl,
+	}, options.includeFrontmatter)
+}
+
+/**
+ * Discover all pages and their metadata for the LLM endpoint
+ */
+async function discoverPages(host: string, options: ResolvedOptions): Promise<{ pages: PageEntry[]; siteMetadata: SiteMetadata }> {
+	const pages: PageEntry[] = []
+	let siteMetadata: SiteMetadata = {}
+
+	// Fetch homepage metadata
+	try {
+		const homeResponse = await fetch(`http://${host}/`, {
+			headers: { Accept: 'text/html' },
+		})
+		if (homeResponse.ok) {
+			const html = await homeResponse.text()
+			const { metadata } = htmlToMarkdown(html)
+			siteMetadata = {
+				title: metadata.title,
+				description: metadata.description,
+			}
+
+			if (options.includeStaticPages) {
+				pages.push({ pathname: '/', title: metadata.title })
+			}
+		}
+	} catch {
+		// Ignore errors
+	}
+
+	return { pages, siteMetadata }
+}
+
+/**
+ * Create dev server middleware to handle markdown requests
+ */
+export function createDevMiddleware(server: ViteDevServer, options: ResolvedOptions, config: AstroConfig) {
+	const baseUrl = getBaseUrl(config)
+
+	// Serve /llms.txt endpoint (only if site is configured)
+	const llmsTxtOptions = options.llmsTxt
+	if (llmsTxtOptions !== false && baseUrl) {
+		server.middlewares.use(async (req, res, next) => {
+			const url = req.url || ''
+
+			if (url !== LLMS_TXT_PATH) {
+				return next()
+			}
+
+			try {
+				const host = req.headers.host || 'localhost:4321'
+				const { pages, siteMetadata } = await discoverPages(host, options)
+				const content = generateLlmsTxt(pages, { ...siteMetadata, baseUrl }, llmsTxtOptions)
+
+				res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+				res.setHeader('Access-Control-Allow-Origin', '*')
+				res.end(content)
+				return
+			} catch (error) {
+				console.error('[astro-page-markdown] Error generating llms.txt:', error)
+			}
+
+			return next()
+		})
+	}
+
+	// Serve /.well-known/llm.md endpoint (only if site is configured)
+	const llmEndpointOptions = options.llmEndpoint
+	if (llmEndpointOptions !== false && baseUrl) {
+		server.middlewares.use(async (req, res, next) => {
+			const url = req.url || ''
+
+			if (url !== LLM_ENDPOINT_PATH) {
+				return next()
+			}
+
+			try {
+				const host = req.headers.host || 'localhost:4321'
+				const { pages, siteMetadata } = await discoverPages(host, options)
+				const markdown = generateLlmMarkdown(pages, { ...siteMetadata, baseUrl }, llmEndpointOptions)
+
+				res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+				res.setHeader('Access-Control-Allow-Origin', '*')
+				res.end(markdown)
+				return
+			} catch (error) {
+				console.error('[astro-page-markdown] Error generating llm.md:', error)
+			}
+
+			return next()
+		})
+	}
+
+	// Serve .md endpoints
+	server.middlewares.use(async (req, res, next) => {
+		const url = req.url || ''
+
+		if (!url.endsWith('.md')) {
+			return next()
+		}
+
+		const pagePath = mdUrlToPagePath(url)
+
+		try {
+			const host = req.headers.host || 'localhost:4321'
+			const markdown = await generateMarkdownForPath(pagePath, host, options, baseUrl)
+
+			if (markdown) {
+				res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+				res.setHeader('Access-Control-Allow-Origin', '*')
+				res.end(markdown)
+				return
+			}
+		} catch (error) {
+			console.error('[astro-page-markdown] Error generating markdown:', error)
+		}
+
+		return next()
+	})
+
+	// Inject alternate link into HTML responses
+	server.middlewares.use((req, res, next) => {
+		const url = req.url || ''
+
+		if (url.endsWith('.md') || ASSET_PATTERN.test(url)) {
+			return next()
+		}
+
+		const originalWrite = res.write
+		const originalEnd = res.end
+		const chunks: Buffer[] = []
+
+		res.write = ((chunk: unknown) => {
+			if (chunk) chunks.push(Buffer.from(chunk as Buffer))
+			return true
+		}) as typeof res.write
+
+		res.end = ((chunk?: unknown, ...args: unknown[]) => {
+			if (chunk) chunks.push(Buffer.from(chunk as Buffer))
+
+			const contentType = res.getHeader('content-type')
+			const isHtml = typeof contentType === 'string' && contentType.includes('text/html')
+
+			res.write = originalWrite
+			res.end = originalEnd
+
+			if (isHtml && chunks.length > 0) {
+				const html = Buffer.concat(chunks).toString('utf8')
+				const pagePath = normalizePath(url)
+				return res.end(injectMarkdownLink(html, pagePath), ...(args as []))
+			}
+
+			return chunks.length > 0
+				? res.end(Buffer.concat(chunks), ...(args as []))
+				: res.end(...(args as []))
+		}) as typeof res.end
+
+		next()
+	})
+}

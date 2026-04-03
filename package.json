@@ -1,0 +1,52 @@
+{
+  "name": "astro-page-markdown",
+  "description": "Astro integration that exposes pages as .md endpoints for LLM consumption",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src/**",
+    "README.md",
+    "NOTICE",
+    "LICENSE",
+    "package.json"
+  ],
+  "keywords": [
+    "markdown",
+    "astro",
+    "llm",
+    "llms-txt",
+    "withastro",
+    "pages"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topik/astro-page-markdown.git"
+  },
+  "dependencies": {
+    "node-html-parser": "^6.1.13"
+  },
+  "peerDependencies": {
+    "astro": "^5.0.0 || ^6.0.0",
+    "vite": "^6 || ^7"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.1",
+    "astro": "^6.0.0",
+    "typescript": "^5"
+  }
+}
